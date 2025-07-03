@@ -7,6 +7,8 @@ import jdatetime
 import sqlite3
 from ttkthemes import ThemedTk
 from datetime import datetime
+import sys
+import traceback # اضافه کردن این خط برای دریافت traceback کامل خطا
 
 # Import logical modules
 from database import create_tables, get_db_connection, insert_letter, get_letters_from_db, get_letter_by_code
@@ -15,15 +17,18 @@ from crm_logic import populate_organizations_treeview, populate_contacts_treevie
 from letter_generation_logic import on_generate_letter, generate_letter_number
 from archive_logic import update_history_treeview, on_search_archive_button, on_open_letter_button
 from helpers import convert_numbers_to_persian, replace_text_in_docx, show_progress_window, hide_progress_window, sort_column
+from login_manager import LoginWindow
 
 # --- Global Configurations (can be loaded from settings_manager) ---
 BASE_FONT = ("Arial", 10)
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, user_id, user_role):
         self.root = root
         self.root.title("مدیریت ارتباط با مشتری و نامه‌نگاری")
         self.root.geometry("1000x700")
+        self.user_id = user_id     # NEW: Store logged-in user's ID
+        self.user_role = user_role # NEW: Store logged-in user's role
 
         # Apply a theme - Reverted to 'clam' or you can set to your preferred theme like 'arc'
         self.root.set_theme("clam") 
@@ -31,6 +36,14 @@ class App:
 
         # Initialize settings
         load_settings()
+
+        # NEW: Disable settings tab for 'user' role
+        if self.user_role == 'user':
+            settings_tab_index = self.notebook.index(self.settings_frame)
+            self.notebook.tab(settings_tab_index, state='disabled')
+            # Optional: Hide it completely if desired
+            # self.notebook.hide(settings_tab_index)
+            messagebox.showinfo("دسترسی محدود", "شما به عنوان کاربر عادی وارد شدید. دسترسی به تنظیمات محدود است.")
 
         # Ensure correct initial paths are set up or default to current directory
         global default_save_path, letterhead_template_path
@@ -606,7 +619,7 @@ class App:
         history_scrollbar = ttk.Scrollbar(history_tree_frame, orient="vertical")
         history_scrollbar.pack(side=tk.RIGHT, fill=tk.Y) 
 
-        self.history_treeview = ttk.Treeview(history_tree_frame, columns=("code", "type", "date", "subject", "organization", "contact"), show="headings", yscrollcommand=history_scrollbar.set)
+        self.history_treeview = ttk.Treeview(history_tree_frame, columns=("code", "type", "date", "subject", "organization", "contact", "CreatedBy"), show="headings", yscrollcommand=history_scrollbar.set)
         history_scrollbar.config(command=self.history_treeview.yview)
 
         # Define columns and headings for history
@@ -668,6 +681,62 @@ class App:
         # Configure column weights for resizing
         settings_frame.grid_columnconfigure(1, weight=1)
 
+    def on_generate_letter_wrapper(self):
+        """Wrapper method to collect data and call on_generate_letter."""
+        self.show_progress("در حال تولید نامه...")
+        try:
+            # Collect all necessary data from the UI fields
+            letter_type = self.letter_type_var.get()
+            subject = self.subject_entry.get()
+            body = self.letter_body_text.get("1.0", tk.END).strip()
+            selected_org_id = self.selected_org_id # Already stored when selecting org
+            selected_contact_id = self.selected_contact_id # Already stored when selecting contact
+
+            if not letter_type:
+                messagebox.showwarning("ورودی ناقص", "لطفاً نوع نامه را انتخاب کنید.")
+                return
+            if not subject:
+                messagebox.showwarning("ورودی ناقص", "لطفاً موضوع نامه را وارد کنید.")
+                return
+            if not body:
+                messagebox.showwarning("ورودی ناقص", "لطفاً متن نامه را وارد کنید.")
+                return
+            # Organization and Contact are optional depending on letter type
+            # For now, we assume they are selected from the CRM tab and stored in self.selected_org_id/contact_id
+
+            # Call the main letter generation logic, passing the user_id
+            on_generate_letter(
+                root_window_ref=self.root,
+                status_bar_ref=self.status_bar,
+                letter_type=letter_type,
+                subject=subject,
+                body_content=body,
+                organization_id=selected_org_id,
+                contact_id=selected_contact_id,
+                save_path=default_save_path, # Using global default_save_path
+                letterhead_template=letterhead_template_path, # Using global letterhead_template_path
+                user_id=self.user_id # Pass the current user's ID
+            )
+
+            # Clear fields after successful generation
+            self.letter_type_var.set("")
+            self.subject_entry.delete(0, tk.END)
+            self.letter_body_text.delete("1.0", tk.END)
+            self.selected_org_id = None
+            self.selected_org_name = None
+            self.selected_contact_id = None
+            self.selected_contact_name = None
+            self.org_display_entry.delete(0, tk.END)
+            self.contact_display_entry.delete(0, tk.END)
+
+            self.update_history_treeview() # Refresh archive after new letter is generated
+
+        except Exception as e:
+            messagebox.showerror("خطا در تولید نامه", f"خطایی رخ داد: {e}")
+        finally:
+            self.hide_progress()
+
+
     def _select_save_path(self):
         """Opens a directory dialog to select the default save path."""
         folder_selected = filedialog.askdirectory(parent=self.root)
@@ -727,9 +796,49 @@ class App:
             self.update_history_treeview()
 
 
+    # --- Global Error Handling ---
+# (اطمینان حاصل کنید که 'import sys' و 'import traceback' در ابتدای فایل شما وجود دارند)
+# ... (کدهای قبلی) ...
+
 if __name__ == "__main__":
-    # Create database tables if they don't exist
-    create_tables()
-    root = ThemedTk()
-    app = App(root)
-    root.mainloop()
+    try:
+        print("DEBUG: تنظیمات اولیه برنامه آغاز شد.")
+        create_tables() 
+        print("DEBUG: جداول دیتابیس بررسی/ایجاد شدند.")
+
+        root = ThemedTk(theme="cl")
+        # root.withdraw() # <--- این خط را کامنت کنید (یک # در ابتدای آن بگذارید) یا حذف کنید
+        print("DEBUG: پنجره اصلی Tkinter ایجاد شد.") # پیام را تغییر دادم
+
+        print("DEBUG: در حال ایجاد پنجره ورود (LoginWindow)...")
+        login_window = LoginWindow(root) 
+        print("DEBUG: پنجره ورود بسته شد. در حال بازیابی وضعیت ورود.")
+
+        logged_in_user_id = login_window.user_id
+        logged_in_user_role = login_window.user_role
+        
+        print(f"DEBUG: نتیجه ورود - شناسه کاربر: {logged_in_user_id}, نقش: {logged_in_user_role}")
+
+        if logged_in_user_id is not None:
+            print("DEBUG: کاربر وارد شده است. نمایش پنجره اصلی و ایجاد نمونه برنامه.")
+            root.deiconify() # این خط ممکن است دیگر لازم نباشد اما فعلا نگه دارید
+            app = App(root, logged_in_user_id, logged_in_user_role)
+            print("DEBUG: نمونه برنامه ایجاد شد. شروع حلقه اصلی (mainloop).")
+            root.mainloop()
+            print("DEBUG: حلقه اصلی به پایان رسید.")
+        else:
+            print("DEBUG: ورود لغو یا ناموفق بود. در حال خروج از برنامه.")
+            root.destroy()
+            sys.exit(0)
+
+    except Exception as e:
+        error_message = f"یک خطای غیرمنتظره رخ داد:\nنوع خطا: {type(e).__name__}\nپیام خطا: {e}\n\n"
+        error_message += "جزئیات کامل خطا (Traceback):\n"
+        error_message += traceback.format_exc()
+
+        print("\n" + "*"*50)
+        print("CRITICAL ERROR CAUGHT:")
+        print(error_message)
+        print("*"*50 + "\n")
+        messagebox.showerror("خطای بحرانی برنامه", error_message + "\n\nبرنامه بسته خواهد شد.", parent=None)
+        sys.exit(1)

@@ -2,7 +2,7 @@ import sqlite3
 import os
 from tkinter import messagebox # Importing for error messages in DB operations
 
-DATABASE_NAME = "crm.db" # مطمئن شوید این مسیر به فایل دیتابیس صحیح اشاره دارد (ممکن است crm_letters.db باشد)
+DATABASE_NAME = "crm.db" # مطمئن شوید این مسیر به فایل دیتابیس صحیح اشاره دارد
 
 def get_db_connection():
     """Establishes a connection to the SQLite database."""
@@ -47,8 +47,19 @@ def create_tables():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_organization_id ON Contacts(organization_id)")
 
 
-    # Create Letters table
-    # This will create the table if it doesn't exist with all specified columns
+    # --- NEW: Create Users table ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('admin', 'user')) DEFAULT 'user'
+        )
+    """)
+    # END NEW: Create Users table
+
+
+    # Create Letters table (ensuring all columns are present, or adding them)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS Letters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,8 +74,10 @@ def create_tables():
             contact_id INTEGER,
             body TEXT,
             file_path TEXT,
+            user_id INTEGER, -- NEW: Column to link to Users table
             FOREIGN KEY (organization_id) REFERENCES Organizations(id) ON DELETE SET NULL,
-            FOREIGN KEY (contact_id) REFERENCES Contacts(id) ON DELETE SET NULL
+            FOREIGN KEY (contact_id) REFERENCES Contacts(id) ON DELETE SET NULL,
+            FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE SET NULL -- NEW: Foreign Key constraint
         )
     """)
 
@@ -82,7 +95,7 @@ def create_tables():
             print(f"DEBUG: Error adding 'body' column: {e}")
 
     # Check if 'file_path' column exists in 'Letters' table, add if not
-    if 'file_path' not in columns: # Re-fetch or ensure list is fresh if multiple alters are possible
+    if 'file_path' not in columns:
         try:
             cursor.execute("ALTER TABLE Letters ADD COLUMN file_path TEXT")
             conn.commit()
@@ -90,8 +103,109 @@ def create_tables():
         except sqlite3.Error as e:
             print(f"DEBUG: Error adding 'file_path' column: {e}")
 
-    conn.commit() # Commit any pending changes
+    # --- NEW MIGRATION: Add 'user_id' column to 'Letters' table if it doesn't exist ---
+    if 'user_id' not in columns:
+        try:
+            cursor.execute("ALTER TABLE Letters ADD COLUMN user_id INTEGER")
+            conn.commit()
+            print("DEBUG: Added 'user_id' column to Letters table.")
+            # If you want to add the foreign key constraint after adding the column,
+            # it's more complex and might require recreating the table or using a separate migration tool.
+            # For simplicity in SQLite, adding the FOREIGN KEY in the initial CREATE TABLE
+            # and just adding the column here for existing tables is common.
+        except sqlite3.Error as e:
+            print(f"DEBUG: Error adding 'user_id' column: {e}")
+    # END NEW MIGRATION
+
+    conn.commit() # Commit any pending changes from create table or alter table
     conn.close()
+
+# --- NEW: User management functions ---
+import hashlib
+
+def hash_password(password):
+    """Hashes a password using SHA256 for storage."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(stored_password_hash, provided_password):
+    """Verifies a provided password against a stored hash."""
+    return stored_password_hash == hash_password(provided_password)
+
+def add_user(username, password, role='user'):
+    """Adds a new user to the Users table."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    password_hash = hash_password(password)
+    try:
+        cursor.execute("INSERT INTO Users (username, password_hash, role) VALUES (?, ?, ?)",
+                       (username, password_hash, role))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        messagebox.showerror("خطا", "نام کاربری از قبل موجود است.")
+        return False
+    except Exception as e:
+        messagebox.showerror("خطا", f"خطا در افزودن کاربر: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_user_by_username(username):
+    """Retrieves user data by username."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM Users WHERE username=?", (username,))
+    user = cursor.fetchone()
+    conn.close()
+    return dict(user) if user else None
+
+def get_user_by_id(user_id):
+    """Retrieves user data by ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM Users WHERE id=?", (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+    return dict(user) if user else None
+
+def get_all_users():
+    """Retrieves all users from the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, role FROM Users ORDER BY username")
+    users = cursor.fetchall()
+    conn.close()
+    return [dict(user) for user in users]
+
+def update_user_role(user_id, new_role):
+    """Updates the role of an existing user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE Users SET role=? WHERE id=?", (new_role, user_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        messagebox.showerror("خطا", f"خطا در به‌روزرسانی نقش کاربر: {e}")
+        return False
+    finally:
+        conn.close()
+
+def delete_user(user_id):
+    """Deletes a user from the Users table."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM Users WHERE id=?", (user_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        messagebox.showerror("خطا", f"خطا در حذف کاربر: {e}")
+        return False
+    finally:
+        conn.close()
+
+# --- Existing functions (modified insert_letter and get_letters_from_db) ---
 
 def insert_organization(name, industry, phone, email, address, description):
     """Inserts a new organization into the database."""
@@ -262,9 +376,10 @@ def get_contact_by_id(contact_id):
     conn.close()
     return dict(contact) if contact else None
 
+# Modified: Now accepts user_id
 def insert_letter(letter_code, letter_code_persian, letter_type_abbr, letter_type_persian,
                   date_gregorian, date_shamsi_persian, subject, 
-                  organization_id, contact_id, body, file_path):
+                  organization_id, contact_id, body, file_path, user_id=None): # user_id is now an argument
     """Inserts a new letter into the database."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -272,11 +387,11 @@ def insert_letter(letter_code, letter_code_persian, letter_type_abbr, letter_typ
         cursor.execute("""
             INSERT INTO Letters (letter_code, letter_code_persian, letter_type_abbr, letter_type_persian,
                                  date_gregorian, date_shamsi_persian, subject, 
-                                 organization_id, contact_id, body, file_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 organization_id, contact_id, body, file_path, user_id) -- user_id added here
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) -- Added ? for user_id
         """, (letter_code, letter_code_persian, letter_type_abbr, letter_type_persian,
               date_gregorian, date_shamsi_persian, subject, 
-              organization_id, contact_id, body, file_path))
+              organization_id, contact_id, body, file_path, user_id)) # user_id passed here
         conn.commit()
         return True
     except sqlite3.IntegrityError as e:
@@ -291,6 +406,7 @@ def insert_letter(letter_code, letter_code_persian, letter_type_abbr, letter_typ
     finally:
         conn.close()
 
+# Modified: Now fetches username
 def get_letters_from_db(search_term=""):
     """Retrieves letters from the database, optionally filtered by search term."""
     conn = get_db_connection()
@@ -300,18 +416,20 @@ def get_letters_from_db(search_term=""):
             L.*, 
             O.name AS organization_name, 
             C.first_name, 
-            C.last_name
+            C.last_name,
+            U.username AS created_by_username -- NEW: Fetch username
         FROM Letters L
         LEFT JOIN Organizations O ON L.organization_id = O.id
         LEFT JOIN Contacts C ON L.contact_id = C.id
+        LEFT JOIN Users U ON L.user_id = U.id -- NEW: Join with Users table
     """
     conditions = []
     params = []
 
     if search_term:
-        conditions.append("(L.letter_code_persian LIKE ? OR L.subject LIKE ? OR O.name LIKE ? OR C.first_name LIKE ? OR C.last_name LIKE ? OR L.letter_type_persian LIKE ?)")
+        conditions.append("(L.letter_code_persian LIKE ? OR L.subject LIKE ? OR O.name LIKE ? OR C.first_name LIKE ? OR C.last_name LIKE ? OR L.letter_type_persian LIKE ? OR U.username LIKE ?)") # Added username to search
         search_pattern = '%' + search_term + '%'
-        params.extend([search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern])
+        params.extend([search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern]) # Extend for the new search term
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -335,10 +453,12 @@ def get_letter_by_code(letter_code_display):
             O.name AS organization_name, 
             C.first_name, 
             C.last_name,
-            C.title AS contact_title
+            C.title AS contact_title,
+            U.username AS created_by_username -- NEW: Fetch username
         FROM Letters L
         LEFT JOIN Organizations O ON L.organization_id = O.id
         LEFT JOIN Contacts C ON L.contact_id = C.id
+        LEFT JOIN Users U ON L.user_id = U.id -- NEW: Join with Users table
         WHERE L.letter_code_persian = ?
     """
     try:
