@@ -252,8 +252,24 @@ class App:
         self.text_letter_body.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.text_letter_body.bind("<Button-3>", self._show_text_context_menu)
 
+        # New: Paste button for letter body
+        self.btn_paste_body = ttk.Button(body_frame, text="چسباندن متن (Paste)", command=self.paste_text_to_body)
+        self.btn_paste_body.pack(pady=5, padx=5, anchor=tk.W) # Placed at the bottom left of body_frame
+
+
         # Generate Button
         ttk.Button(letter_frame, text="تولید نامه", command=lambda: on_generate_letter(self)).pack(pady=10)
+
+    # New: Method to paste text into the letter body
+    def paste_text_to_body(self):
+        """Pastes text from the clipboard into the letter body text area."""
+        try:
+            clipboard_content = self.root.clipboard_get() # Get content from clipboard
+            self.text_letter_body.insert(tk.END, clipboard_content) # Insert at the end of the text widget
+        except tk.TclError:
+            messagebox.showwarning("خطا در چسباندن", "کلیپ‌بورد خالی است یا محتوای متنی ندارد.", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("خطا", f"خطایی در چسباندن متن رخ داد: {e}", parent=self.root)
 
     def populate_org_contact_combos(self):
         """Populates organization and contact comboboxes."""
