@@ -2,17 +2,17 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 import os
 import shutil
-from docx import Document # Note: This import might not be strictly necessary here if replace_text_in_docx handles it.
+from docx import Document
 import jdatetime
 import sqlite3
-from ttkthemes import ThemedTk # Ensure this is imported for themes
+from ttkthemes import ThemedTk
 from datetime import datetime
 
 # Import logical modules
 from database import create_tables, get_db_connection, insert_letter, get_letters_from_db, get_letter_by_code
-from settings_manager import load_settings, save_settings, company_name, full_company_name, default_save_path, letterhead_template_path, set_default_settings # Added full_company_name
+from settings_manager import load_settings, save_settings, company_name, full_company_name, default_save_path, letterhead_template_path, set_default_settings
 from crm_logic import populate_organizations_treeview, populate_contacts_treeview, on_add_organization_button, on_edit_organization_button, on_delete_organization_button, on_add_contact_button, on_edit_contact_button, on_delete_contact_button, on_organization_select
-from letter_generation_logic import on_generate_letter, generate_letter_number # Import the new consolidated function, and generate_letter_number
+from letter_generation_logic import on_generate_letter, generate_letter_number
 from archive_logic import update_history_treeview, on_search_archive_button, on_open_letter_button
 from helpers import convert_numbers_to_persian, replace_text_in_docx, show_progress_window, hide_progress_window, sort_column
 
@@ -25,20 +25,20 @@ class App:
         self.root.title("مدیریت ارتباط با مشتری و نامه‌نگاری")
         self.root.geometry("1000x700")
 
-        # Apply a theme
-        self.root.set_theme("arc") # You can experiment with other themes: 'plastik', 'clam', 'alt', 'breeze' etc.
+        # Apply a theme - Reverted to 'clam' or you can set to your preferred theme like 'arc'
+        self.root.set_theme("clam") # Changed back to 'clam' or your original preferred theme if it was 'arc'
+                                    # You can try 'plastik', 'alt', 'breeze', 'arc', 'elegance' etc.
 
         # Initialize settings
         load_settings()
 
         # Ensure correct initial paths are set up or default to current directory
-        # These are now handled by settings_manager, but good to have a fallback check
         global default_save_path, letterhead_template_path
         if not default_save_path:
             default_save_path = os.path.join(os.path.expanduser("~"), "Documents", "GeneratedLetters")
             if not os.path.exists(default_save_path):
                 os.makedirs(default_save_path)
-            save_settings() # Save updated path
+            save_settings()
         
         # --- Status bar (INITIALIZED EARLY) ---
         self.status_bar = tk.Label(root, text="آماده به کار", bd=1, relief=tk.SUNKEN, anchor=tk.W, font=BASE_FONT)
@@ -63,7 +63,7 @@ class App:
         self.notebook.add(self.tab_settings, text="تنظیمات")
 
         # --- CRM Tab (tab_crm) ---
-        self._setup_crm_tab() # Now status_bar exists when this is called
+        self._setup_crm_tab()
 
         # --- Letter Generation Tab (tab_letter) ---
         self._setup_letter_tab()
@@ -75,15 +75,14 @@ class App:
         self._setup_settings_tab()
 
         # Initial data population
-        self.populate_org_contact_combos() # Populates combos on app start
-        self.update_history_treeview() # Call instance method which uses self.history_treeview
+        self.populate_org_contact_combos()
+        self.update_history_treeview()
 
         # Bind tab change event to refresh data
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_change)
 
     # --- Helper methods for progress bar ---
     def show_progress(self, message="در حال پردازش..."):
-        # Corrected argument order (already done in previous step, confirming it's here)
         show_progress_window(message, self.root)
 
     def hide_progress(self):
@@ -211,13 +210,13 @@ class App:
         org_contact_frame.pack(fill=tk.X, pady=5)
 
         ttk.Label(org_contact_frame, text="سازمان:").pack(side=tk.RIGHT, padx=5)
-        self.org_data_map = {} # To store organization name -> id mapping
+        self.org_data_map = {}
         self.combo_org_letter = ttk.Combobox(org_contact_frame, state="readonly", width=30)
         self.combo_org_letter.pack(side=tk.RIGHT, padx=5, expand=True, fill=tk.X)
         self.combo_org_letter.bind("<<ComboboxSelected>>", self._on_org_letter_select)
 
         ttk.Label(org_contact_frame, text="مخاطب:").pack(side=tk.RIGHT, padx=5)
-        self.all_contacts_data = {} # To store full contact name -> contact data mapping
+        self.all_contacts_data = {}
         self.combo_contact_letter = ttk.Combobox(org_contact_frame, state="readonly", width=30)
         self.combo_contact_letter.pack(side=tk.RIGHT, padx=5, expand=True, fill=tk.X)
 
@@ -232,7 +231,7 @@ class App:
             "GEN": "عمومی"
         }
         self.combo_letter_type = ttk.Combobox(letter_type_frame, values=list(self.letter_types.values()), state="readonly", width=20)
-        self.combo_letter_type.set(self.letter_types["FIN"]) # Default value
+        self.combo_letter_type.set(self.letter_types["FIN"])
         self.combo_letter_type.pack(side=tk.RIGHT, padx=5)
 
 
@@ -248,10 +247,10 @@ class App:
         # Row 4: Letter Body
         body_frame = ttk.Frame(letter_frame)
         body_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        ttk.Label(body_frame, text="متن نامه:").pack(side=tk.TOP, anchor=tk.E, padx=5) # Align label to the right
+        ttk.Label(body_frame, text="متن نامه:").pack(side=tk.TOP, anchor=tk.E, padx=5)
         self.text_letter_body = tk.Text(body_frame, wrap="word", height=15, font=BASE_FONT)
         self.text_letter_body.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.text_letter_body.bind("<Button-3>", self._show_text_context_menu) # Bind right-click for context menu
+        self.text_letter_body.bind("<Button-3>", self._show_text_context_menu)
 
         # Generate Button
         ttk.Button(letter_frame, text="تولید نامه", command=lambda: on_generate_letter(self)).pack(pady=10)
@@ -264,32 +263,31 @@ class App:
         # Populate Organization Combobox
         cursor.execute("SELECT id, name FROM Organizations ORDER BY name")
         organizations = cursor.fetchall()
-        org_names = ["---"] # Add a default empty option
-        self.org_data_map = {"---": None} # Reset map
+        org_names = ["---"]
+        self.org_data_map = {"---": None}
         for org in organizations:
             org_names.append(org['name'])
             self.org_data_map[org['name']] = org['id']
         self.combo_org_letter['values'] = org_names
-        self.combo_org_letter.set("---") # Set default
+        self.combo_org_letter.set("---")
 
         # Populate Contact Combobox (all contacts initially)
-        cursor.execute("SELECT id, first_name, last_name, organization_id, title FROM Contacts ORDER BY first_name, last_name") # Added title
+        cursor.execute("SELECT id, first_name, last_name, organization_id, title FROM Contacts ORDER BY first_name, last_name")
         contacts = cursor.fetchall()
-        contact_full_names = ["---"] # Add a default empty option
-        self.all_contacts_data = {"---": None} # Reset map
+        contact_full_names = ["---"]
+        self.all_contacts_data = {"---": None}
         for contact in contacts:
             full_name = f"{contact['first_name']} {contact['last_name']}"
             contact_full_names.append(full_name)
-            # Store full contact data including organization_id and title
             self.all_contacts_data[full_name] = {
                 'id': contact['id'],
                 'first_name': contact['first_name'],
                 'last_name': contact['last_name'],
                 'organization_id': contact['organization_id'],
-                'title': contact['title'] # Store title
+                'title': contact['title']
             }
         self.combo_contact_letter['values'] = contact_full_names
-        self.combo_contact_letter.set("---") # Set default
+        self.combo_contact_letter.set("---")
 
         conn.close()
 
@@ -299,15 +297,15 @@ class App:
         selected_org_id = self.org_data_map.get(selected_org_name)
 
         filtered_contact_names = ["---"]
-        self.combo_contact_letter.set("---") # Reset contact selection
+        self.combo_contact_letter.set("---")
 
-        if selected_org_id is not None: # If an organization is actually selected (not "---")
+        if selected_org_id is not None:
             for full_name, contact_data in self.all_contacts_data.items():
                 if contact_data and contact_data['organization_id'] == selected_org_id:
                     filtered_contact_names.append(full_name)
-        else: # If "---" is selected, show all contacts
+        else:
             for full_name in self.all_contacts_data.keys():
-                if full_name != "---": # Don't add "---" twice
+                if full_name != "---":
                     filtered_contact_names.append(full_name)
 
         self.combo_contact_letter['values'] = filtered_contact_names
@@ -365,29 +363,29 @@ class App:
         settings_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Company Name (Abbreviation)
-        ttk.Label(settings_frame, text="نام اختصاری شرکت (کد نامه‌):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(settings_frame, text="نام اختصاری شرکت (کد نامه‌):").grid(row=0, column=0, sticky=tk.E, padx=5, pady=5)
         self.entry_company_name_abbr = ttk.Entry(settings_frame, width=50)
         self.entry_company_name_abbr.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=5)
-        self.entry_company_name_abbr.insert(0, company_name) # Load current setting
+        self.entry_company_name_abbr.insert(0, company_name)
 
         # Full Company Name
-        ttk.Label(settings_frame, text="نام کامل شرکت (در پابرگ نامه):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(settings_frame, text="نام کامل شرکت (در پابرگ نامه):").grid(row=1, column=0, sticky=tk.E, padx=5, pady=5)
         self.entry_full_company_name = ttk.Entry(settings_frame, width=50)
         self.entry_full_company_name.grid(row=1, column=1, sticky=tk.EW, padx=5, pady=5)
-        self.entry_full_company_name.insert(0, full_company_name) # Load current setting
+        self.entry_full_company_name.insert(0, full_company_name)
 
         # Default Save Path
-        ttk.Label(settings_frame, text="مسیر پیش‌فرض ذخیره نامه‌ها:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(settings_frame, text="مسیر پیش‌فرض ذخیره نامه‌ها:").grid(row=2, column=0, sticky=tk.E, padx=5, pady=5)
         self.entry_save_path = ttk.Entry(settings_frame, width=50)
         self.entry_save_path.grid(row=2, column=1, sticky=tk.EW, padx=5, pady=5)
-        self.entry_save_path.insert(0, default_save_path) # Load current setting
+        self.entry_save_path.insert(0, default_save_path)
         ttk.Button(settings_frame, text="انتخاب مسیر", command=self._select_save_path).grid(row=2, column=2, padx=5, pady=5)
 
         # Letterhead Template Path
-        ttk.Label(settings_frame, text="مسیر فایل الگوی سربرگ (Word):").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(settings_frame, text="مسیر فایل الگوی سربرگ (Word):").grid(row=3, column=0, sticky=tk.E, padx=5, pady=5)
         self.entry_template_path = ttk.Entry(settings_frame, width=50)
         self.entry_template_path.grid(row=3, column=1, sticky=tk.EW, padx=5, pady=5)
-        self.entry_template_path.insert(0, letterhead_template_path) # Load current setting
+        self.entry_template_path.insert(0, letterhead_template_path)
         ttk.Button(settings_frame, text="انتخاب فایل", command=self._select_template_file).grid(row=3, column=2, padx=5, pady=5)
 
         # Save Settings Button
@@ -425,13 +423,13 @@ class App:
         messagebox.showinfo("تنظیمات", "تنظیمات با موفقیت ذخیره شد.", parent=self.root)
         if self.status_bar: self.status_bar.config(text="تنظیمات ذخیره شد.")
 
-    # Helper method for context menu
+    # Helper method for context menu - Re-added Paste command
     def _show_text_context_menu(self, event):
         """Displays a right-click context menu for Text widgets."""
         context_menu = tk.Menu(self.root, tearoff=0)
         context_menu.add_command(label="بریدن", command=lambda: event.widget.event_generate("<<Cut>>"))
         context_menu.add_command(label="کپی", command=lambda: event.widget.event_generate("<<Copy>>"))
-        context_menu.add_command(label="چسباندن", command=lambda: event.widget.event_generate("<<Paste>>"))
+        context_menu.add_command(label="چسباندن", command=lambda: event.widget.event_generate("<<Paste>>")) # Added back paste
         
         try:
             context_menu.tk_popup(event.x_root, event.y_root)
@@ -457,6 +455,6 @@ class App:
 if __name__ == "__main__":
     # Create database tables if they don't exist
     create_tables()
-    root = ThemedTk() # Use ThemedTk for themed widgets
+    root = ThemedTk()
     app = App(root)
     root.mainloop()
