@@ -60,8 +60,8 @@ def generate_letter_number(app_instance):
 
 def on_generate_letter(app_instance):
     """Handles the letter generation process."""
-    org_name = app_instance.combo_org_letter.get()
-    contact_full_name = app_instance.combo_contact_letter.get()
+    org_name = app_instance.entry_org_letter.get()
+    contact_full_name = app_instance.entry_contact_letter.get()
     subject = app_instance.entry_subject.get().strip()
     body = app_instance.text_letter_body.get("1.0", END).strip()
     letter_type_display = app_instance.combo_letter_type.get() # This is letter_type_persian
@@ -73,7 +73,8 @@ def on_generate_letter(app_instance):
     if not body:
         messagebox.showwarning("ورودی ناقص", "لطفاً متن اصلی نامه را وارد کنید.", parent=app_instance.root)
         return
-    if org_name == "---" and contact_full_name == "---":
+    # Check if both fields are empty or set to initial placeholder values
+    if not org_name and not contact_full_name:
         messagebox.showwarning("ورودی ناقص", "لطفاً حداقل یک سازمان یا مخاطب مقصد نامه را انتخاب کنید.", parent=app_instance.root)
         return
     if not letterhead_template_path or not os.path.exists(letterhead_template_path):
@@ -83,14 +84,9 @@ def on_generate_letter(app_instance):
     app_instance.show_progress("در حال تولید نامه...")
 
     try:
-        organization_id = None
-        if org_name != "---": 
-            organization_id = app_instance.org_data_map.get(org_name)
-        
-        contact_id = None
-        if contact_full_name != "---": 
-            contact_data = app_instance.all_contacts_data.get(contact_full_name)
-            contact_id = contact_data['id'] if contact_data else None
+        # Use selected_org_id and selected_contact_id directly
+        organization_id = app_instance.selected_org_id if app_instance.selected_org_id else None
+        contact_id = app_instance.selected_contact_id if app_instance.selected_contact_id else None
         
         today_j = jdatetime.date.today()
         date_shamsi_persian = convert_numbers_to_persian(f"{today_j.year}/{today_j.month:02d}/{today_j.day:02d}")
@@ -109,8 +105,8 @@ def on_generate_letter(app_instance):
         replacements = {
             "[[DATE]]": date_shamsi_persian,
             "[[CODE]]": letter_code_persian,
-            "[[ORGANIZATION_NAME]]": org_name if org_name != "---" else "", 
-            "[[CONTACT_NAME]]": contact_full_name if contact_full_name != "---" else "", 
+            "[[ORGANIZATION_NAME]]": org_name, 
+            "[[CONTACT_NAME]]": contact_full_name, 
             "[[SUBJECT]]": subject,
             "[[BODY]]": body,
             "[[COMPANY_NAME]]": full_company_name 
@@ -138,16 +134,29 @@ def on_generate_letter(app_instance):
         except Exception as open_error:
             messagebox.showwarning("هشدار", f"فایل '{file_name}' با موفقیت کپی و ویرایش شد، اما در باز کردن آن خطایی رخ داد: {open_error}", parent=app_instance.root)
 
+        # Clear fields after successful generation
         app_instance.entry_subject.delete(0, END)
         app_instance.text_letter_body.delete("1.0", END)
-        app_instance.combo_org_letter.set("---")
-        app_instance.combo_contact_letter.set("---")
+        
+        # Clear readonly Entry fields
+        app_instance.entry_org_letter.config(state="normal")
+        app_instance.entry_org_letter.delete(0, END)
+        app_instance.entry_org_letter.config(state="readonly")
+        app_instance.selected_org_id = None
+        app_instance.selected_org_name = None # Clear cached name
+
+        app_instance.entry_contact_letter.config(state="normal")
+        app_instance.entry_contact_letter.delete(0, END)
+        app_instance.entry_contact_letter.config(state="readonly")
+        app_instance.selected_contact_id = None
+        app_instance.selected_contact_name = None # Clear cached name
+
         app_instance.combo_letter_type.set(app_instance.letter_types["FIN"]) 
         
-        if app_instance.status_bar: app_instance.status_bar.config(text="شماره نامه جدید با موفقیت ایجاد شد.")
+        if app_instance.status_bar: app_instance.status_bar.config(text="نامه جدید با موفقیت ایجاد شد.")
         app_instance.update_history_treeview("") 
-        app_instance.populate_org_contact_combos() 
-
+        # app_instance.populate_org_contact_combos() # This might not be needed anymore after dialogs
+        
     except Exception as e:
         messagebox.showerror("خطا در تولید نامه", f"خطایی در فرآیند تولید نامه رخ داد: {e}", parent=app_instance.root)
         print(f"DEBUG: Error in on_generate_letter: {e}") 

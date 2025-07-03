@@ -37,7 +37,10 @@ def on_open_letter_button(history_treeview_ref, root_window_ref, status_bar_ref)
     """Opens the selected letter file."""
     selected_items = history_treeview_ref.selection()
     if selected_items:
-        letter_code_from_treeview = history_treeview_ref.item(selected_items[0], 'iid')
+        # ابتدا تمام مقادیر آیتم انتخاب شده را دریافت کنید
+        item_values = history_treeview_ref.item(selected_items[0], 'values')
+    # فرض بر این است که "کد نامه" (code) اولین ستون در Treeview شما است (اندیس 0)
+        letter_code_from_treeview = item_values[0]
         letter_data_from_db = get_letter_by_code(letter_code_from_treeview)
 
         if letter_data_from_db and os.path.exists(letter_data_from_db['file_path']):
