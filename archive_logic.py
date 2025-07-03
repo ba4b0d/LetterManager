@@ -18,7 +18,7 @@ def update_history_treeview(search_term="", history_treeview_ref=None, status_ba
 
             display_values = (
                 letter_data['letter_code_persian'],
-                letter_data['letter_type_persian'], # CHANGED: Corrected to use 'letter_type_persian'
+                letter_data['letter_type_persian'], # Corrected to use 'letter_type_persian'
                 letter_data['date_shamsi_persian'],
                 letter_data['subject'],
                 org_name,
