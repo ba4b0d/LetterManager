@@ -9,8 +9,11 @@ from helpers import convert_numbers_to_persian, replace_text_in_docx, show_progr
 from settings_manager import company_name, default_save_path, letterhead_template_path, full_company_name 
 
 
-def generate_letter_number(app_instance):
-    """Generates a new letter code based on current date and database sequence."""
+def generate_letter_number(letter_type_display, letter_types_map):
+    """
+    Generates a new letter code based on current date and database sequence.
+    Now accepts letter_type_display and letter_types_map directly.
+    """
     year_shamsi = jdatetime.date.today().year
     
     conn = get_db_connection()
@@ -20,20 +23,11 @@ def generate_letter_number(app_instance):
 
     # Find the maximum existing sequence number for the current Shamsi year
     current_year_prefix = str(year_shamsi) + '/'
-    # Changed query to directly select the maximum numerical part to be more robust
     cursor.execute(f"""
-        SELECT MAX(CAST(SUBSTR(letter_code, INSTR(letter_code, '-') + INSTR(SUBSTR(letter_code, INSTR(letter_code, '-') + 1), '-') + INSTR(SUBSTR(letter_code, INSTR(letter_code, '-') + INSTR(SUBSTR(letter_code, INSTR(letter_code, '-') + 1), '-') + 1), '-') + 1) AS INTEGER))
+        SELECT MAX(CAST(SUBSTR(letter_code_persian, INSTR(letter_code_persian, '-') + INSTR(SUBSTR(letter_code_persian, INSTR(letter_code_persian, '-') + 1), '-') + INSTR(SUBSTR(letter_code_persian, INSTR(letter_code_persian, '-') + INSTR(SUBSTR(letter_code_persian, INSTR(letter_code_persian, '-') + 1), '-') + 1), '-') + 1) AS INTEGER))
         FROM Letters
-        WHERE letter_code LIKE '{company_name}-%-{year_shamsi}-%'
+        WHERE letter_code_persian LIKE '{company_name}-%-{year_shamsi}-%'
     """)
-    # Explanation of SUBSTR and INSTR for robust parsing:
-    # 1. INSTR(letter_code, '-') finds the first hyphen.
-    # 2. SUBSTR(letter_code, INSTR(letter_code, '-') + 1) gets the part after the first hyphen.
-    # 3. INSTR(SUBSTR(letter_code, ...), '-') finds the second hyphen in the remaining part.
-    # 4. INSTR(SUBSTR(letter_code, INSTR(letter_code, '-') + INSTR(SUBSTR(letter_code, INSTR(letter_code, '-') + 1), '-') + 1), '-') finds the third hyphen in the remaining part.
-    # 5. Adding 1 to the final INSTR result gets the position right after the last hyphen before the number.
-    # This complex SUBSTR/INSTR chain is to reliably get the "NNN" part from "COMPANY-TYPE-YYYY-NNN".
-    # CAST(... AS INTEGER) converts it to a number so MAX works correctly.
 
     max_sequence = cursor.fetchone()[0]
     
@@ -42,10 +36,9 @@ def generate_letter_number(app_instance):
             
     conn.close()
     
-    selected_letter_type_value = app_instance.combo_letter_type.get()
     letter_type_abbr = None
-    for abbr, full_name in app_instance.letter_types.items():
-        if full_name == selected_letter_type_value:
+    for abbr, full_name in letter_types_map.items(): # Use passed map
+        if full_name == letter_type_display:
             letter_type_abbr = abbr
             break
 
@@ -58,49 +51,66 @@ def generate_letter_number(app_instance):
     return letter_code, letter_code_persian
 
 
-def on_generate_letter(app_instance):
-    """Handles the letter generation process."""
-    org_name = app_instance.entry_org_letter.get()
-    contact_full_name = app_instance.entry_contact_letter.get()
-    subject = app_instance.entry_subject.get().strip()
-    body = app_instance.text_letter_body.get("1.0", END).strip()
-    letter_type_display = app_instance.combo_letter_type.get() # This is letter_type_persian
+def on_generate_letter(root_window_ref, status_bar_ref, letter_type_display, subject, body_content, organization_id, contact_id, save_path, letterhead_template, user_id, letter_types_map):
+    """
+    Handles the letter generation process.
+    Now accepts all necessary parameters directly, including letter_types_map.
+    """
     
-    # Validation
+    # Validation (using passed arguments)
     if not subject:
-        messagebox.showwarning("ورودی ناقص", "لطفاً موضوع نامه را وارد کنید.", parent=app_instance.root)
+        messagebox.showwarning("ورودی ناقص", "لطفاً موضوع نامه را وارد کنید.", parent=root_window_ref)
         return
-    if not body:
-        messagebox.showwarning("ورودی ناقص", "لطفاً متن اصلی نامه را وارد کنید.", parent=app_instance.root)
+    if not body_content:
+        messagebox.showwarning("ورودی ناقص", "لطفاً متن اصلی نامه را وارد کنید.", parent=root_window_ref)
         return
-    # Check if both fields are empty or set to initial placeholder values
-    if not org_name and not contact_full_name:
-        messagebox.showwarning("ورودی ناقص", "لطفاً حداقل یک سازمان یا مخاطب مقصد نامه را انتخاب کنید.", parent=app_instance.root)
+    
+    # Check if both organization_id and contact_id are None
+    if organization_id is None and contact_id is None:
+        messagebox.showwarning("ورودی ناقص", "لطفاً حداقل یک سازمان یا مخاطب مقصد نامه را انتخاب کنید.", parent=root_window_ref)
         return
-    if not letterhead_template_path or not os.path.exists(letterhead_template_path):
-        messagebox.showerror("خطا", "مسیر فایل الگوی سربرگ (Word) در تنظیمات مشخص نشده یا فایل وجود ندارد. لطفاً در تب 'تنظیمات' آن را تنظیم کنید.", parent=app_instance.root)
+    
+    if not letterhead_template or not os.path.exists(letterhead_template):
+        messagebox.showerror("خطا", "مسیر فایل الگوی سربرگ (Word) در تنظیمات مشخص نشده یا فایل وجود ندارد. لطفاً در تب 'تنظیمات' آن را تنظیم کنید.", parent=root_window_ref)
         return
 
-    app_instance.show_progress("در حال تولید نامه...")
+    # Use the passed status_bar_ref and root_window_ref for progress and messageboxes
+    show_progress_window("در حال تولید نامه...", root_window_ref)
 
     try:
-        # Use selected_org_id and selected_contact_id directly
-        organization_id = app_instance.selected_org_id if app_instance.selected_org_id else None
-        contact_id = app_instance.selected_contact_id if app_instance.selected_contact_id else None
+        # Retrieve organization and contact names for replacements
+        org_name = ""
+        contact_full_name = ""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        if organization_id:
+            cursor.execute("SELECT name FROM Organizations WHERE id = ?", (organization_id,))
+            org_data = cursor.fetchone()
+            if org_data:
+                org_name = org_data['name']
         
+        if contact_id:
+            cursor.execute("SELECT first_name, last_name FROM Contacts WHERE id = ?", (contact_id,))
+            contact_data = cursor.fetchone()
+            if contact_data:
+                contact_full_name = f"{contact_data['first_name']} {contact_data['last_name']}"
+        
+        conn.close()
+
         today_j = jdatetime.date.today()
         date_shamsi_persian = convert_numbers_to_persian(f"{today_j.year}/{today_j.month:02d}/{today_j.day:02d}")
         date_gregorian = datetime.now().strftime("%Y-%m-%d")
 
-        letter_code, letter_code_persian = generate_letter_number(app_instance) 
+        # Pass letter_type_display and letter_types_map to generate_letter_number
+        letter_code, letter_code_persian = generate_letter_number(letter_type_display, letter_types_map) 
 
-        letter_type_abbr = None
-        for abbr, full_name in app_instance.letter_types.items():
+        # Determine abbreviation from display name using the passed map
+        letter_type_abbr = "GEN" # Default
+        for abbr, full_name in letter_types_map.items():
             if full_name == letter_type_display:
                 letter_type_abbr = abbr
                 break
-        if not letter_type_abbr:
-            letter_type_abbr = "GEN" 
 
         replacements = {
             "[[DATE]]": date_shamsi_persian,
@@ -108,57 +118,45 @@ def on_generate_letter(app_instance):
             "[[ORGANIZATION_NAME]]": org_name, 
             "[[CONTACT_NAME]]": contact_full_name, 
             "[[SUBJECT]]": subject,
-            "[[BODY]]": body,
+            "[[BODY]]": body_content, # Use body_content
             "[[COMPANY_NAME]]": full_company_name 
         }
 
-        if not os.path.exists(default_save_path):
-            os.makedirs(default_save_path)
+        if not os.path.exists(save_path): # Use passed save_path
+            os.makedirs(save_path)
 
         file_name_subject = "".join(c for c in subject if c.isalnum() or c in (' ', '-', '_')).strip()
         file_name = f"{letter_code} - {file_name_subject}.docx"
-        new_file_path = os.path.join(default_save_path, file_name)
+        new_file_path = os.path.join(save_path, file_name)
 
-        shutil.copyfile(letterhead_template_path, new_file_path)
+        shutil.copyfile(letterhead_template, new_file_path) # Use passed letterhead_template
         replace_text_in_docx(new_file_path, replacements)
 
-        if not insert_letter(letter_code, letter_code_persian, letter_type_abbr, letter_type_display,
-                             date_gregorian, date_shamsi_persian, subject, 
-                             organization_id, contact_id, body, new_file_path):
-            messagebox.showwarning("هشدار", "نامه با موفقیت تولید شد، اما در ذخیره آن در پایگاه داده مشکلی پیش آمد.", parent=app_instance.root)
+        if not insert_letter(
+            letter_code_prefix=company_name, # Assuming company_name is global or passed
+            letter_code_number=int(letter_code.split('-')[-1]), # Extract number from code
+            letter_code_persian=letter_code_persian,
+            type=letter_type_abbr, # Use abbreviation
+            date_gregorian=date_gregorian,
+            date_shamsi_persian=date_shamsi_persian,
+            subject=subject, 
+            organization_id=organization_id,
+            contact_id=contact_id,
+            body=body_content,
+            file_path=new_file_path,
+            user_id=user_id # Use passed user_id
+        ):
+            messagebox.showwarning("هشدار", "نامه با موفقیت تولید شد، اما در ذخیره آن در پایگاه داده مشکلی پیش آمد.", parent=root_window_ref)
         
-        messagebox.showinfo("عملیات موفق", f"فایل با نام {file_name} در مسیر '{default_save_path}' ذخیره و محتوای آن بروزرسانی شد.", parent=app_instance.root)
+        messagebox.showinfo("عملیات موفق", f"فایل با نام {file_name} در مسیر '{save_path}' ذخیره و محتوای آن بروزرسانی شد.", parent=root_window_ref)
         
         try:
             os.startfile(new_file_path)
         except Exception as open_error:
-            messagebox.showwarning("هشدار", f"فایل '{file_name}' با موفقیت کپی و ویرایش شد، اما در باز کردن آن خطایی رخ داد: {open_error}", parent=app_instance.root)
+            messagebox.showwarning("هشدار", f"فایل '{file_name}' با موفقیت کپی و ویرایش شد، اما در باز کردن آن خطایی رخ داد: {open_error}", parent=root_window_ref)
 
-        # Clear fields after successful generation
-        app_instance.entry_subject.delete(0, END)
-        app_instance.text_letter_body.delete("1.0", END)
-        
-        # Clear readonly Entry fields
-        app_instance.entry_org_letter.config(state="normal")
-        app_instance.entry_org_letter.delete(0, END)
-        app_instance.entry_org_letter.config(state="readonly")
-        app_instance.selected_org_id = None
-        app_instance.selected_org_name = None # Clear cached name
-
-        app_instance.entry_contact_letter.config(state="normal")
-        app_instance.entry_contact_letter.delete(0, END)
-        app_instance.entry_contact_letter.config(state="readonly")
-        app_instance.selected_contact_id = None
-        app_instance.selected_contact_name = None # Clear cached name
-
-        app_instance.combo_letter_type.set(app_instance.letter_types["FIN"]) 
-        
-        if app_instance.status_bar: app_instance.status_bar.config(text="نامه جدید با موفقیت ایجاد شد.")
-        app_instance.update_history_treeview("") 
-        # app_instance.populate_org_contact_combos() # This might not be needed anymore after dialogs
-        
     except Exception as e:
-        messagebox.showerror("خطا در تولید نامه", f"خطایی در فرآیند تولید نامه رخ داد: {e}", parent=app_instance.root)
+        messagebox.showerror("خطا در تولید نامه", f"خطایی در فرآیند تولید نامه رخ داد: {e}", parent=root_window_ref)
         print(f"DEBUG: Error in on_generate_letter: {e}") 
     finally:
-        app_instance.hide_progress()
+        hide_progress_window() # Call directly, no app_instance

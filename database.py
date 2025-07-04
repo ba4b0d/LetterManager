@@ -1,13 +1,15 @@
 import sqlite3
 import os
-from tkinter import messagebox # Importing for error messages in DB operations
+import hashlib 
+from tkinter import messagebox 
+from datetime import datetime 
 
-DATABASE_NAME = "crm.db" # مطمئن شوید این مسیر به فایل دیتابیس صحیح اشاره دارد
+DATABASE_NAME = "crm.db" 
 
 def get_db_connection():
     """Establishes a connection to the SQLite database."""
     conn = sqlite3.connect(DATABASE_NAME)
-    conn.row_factory = sqlite3.Row  # Allows accessing columns by name
+    conn.row_factory = sqlite3.Row  
     return conn
 
 def create_tables():
@@ -43,105 +45,78 @@ def create_tables():
             FOREIGN KEY (organization_id) REFERENCES Organizations(id) ON DELETE SET NULL
         )
     """)
-    # Add an index to contacts for faster lookup by organization_id
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_organization_id ON Contacts(organization_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_organization_id ON Contacts (organization_id);")
+
+    # Create Letters table - Ensure this matches the columns being inserted
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Letters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            letter_code_prefix TEXT NOT NULL,
+            letter_code_number INTEGER NOT NULL,
+            letter_code_persian TEXT NOT NULL UNIQUE, 
+            type TEXT NOT NULL,
+            date_shamsi_persian TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            organization_id INTEGER,
+            contact_id INTEGER,
+            file_path TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER, 
+            FOREIGN KEY (organization_id) REFERENCES Organizations(id) ON DELETE SET NULL,
+            FOREIGN KEY (contact_id) REFERENCES Contacts(id) ON DELETE SET NULL,
+            FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE SET NULL 
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_letters_user_id ON Letters (user_id);")
 
 
-    # --- NEW: Create Users table ---
+    # Create Users table 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS Users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('admin', 'user')) DEFAULT 'user'
+            password_hash TEXT NOT NULL, 
+            role TEXT NOT NULL DEFAULT 'user' 
         )
     """)
-    # END NEW: Create Users table
-
-
-    # Create Letters table (ensuring all columns are present, or adding them)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Letters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            letter_code TEXT NOT NULL UNIQUE,
-            letter_code_persian TEXT NOT NULL UNIQUE,
-            letter_type_abbr TEXT,
-            letter_type_persian TEXT,
-            date_gregorian TEXT,
-            date_shamsi_persian TEXT,
-            subject TEXT,
-            organization_id INTEGER,
-            contact_id INTEGER,
-            body TEXT,
-            file_path TEXT,
-            user_id INTEGER, -- NEW: Column to link to Users table
-            FOREIGN KEY (organization_id) REFERENCES Organizations(id) ON DELETE SET NULL,
-            FOREIGN KEY (contact_id) REFERENCES Contacts(id) ON DELETE SET NULL,
-            FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE SET NULL -- NEW: Foreign Key constraint
-        )
-    """)
-
-    # --- Schema Migration: Add missing columns to existing tables ---
-    # Check if 'body' column exists in 'Letters' table, add if not
-    cursor.execute("PRAGMA table_info(Letters)")
-    columns = [col[1] for col in cursor.fetchall()] # Get column names
-    
-    if 'body' not in columns:
-        try:
-            cursor.execute("ALTER TABLE Letters ADD COLUMN body TEXT")
-            conn.commit()
-            print("DEBUG: Added 'body' column to Letters table.")
-        except sqlite3.Error as e:
-            print(f"DEBUG: Error adding 'body' column: {e}")
-
-    # Check if 'file_path' column exists in 'Letters' table, add if not
-    if 'file_path' not in columns:
-        try:
-            cursor.execute("ALTER TABLE Letters ADD COLUMN file_path TEXT")
-            conn.commit()
-            print("DEBUG: Added 'file_path' column to Letters table.")
-        except sqlite3.Error as e:
-            print(f"DEBUG: Error adding 'file_path' column: {e}")
-
-    # --- NEW MIGRATION: Add 'user_id' column to 'Letters' table if it doesn't exist ---
-    if 'user_id' not in columns:
-        try:
-            cursor.execute("ALTER TABLE Letters ADD COLUMN user_id INTEGER")
-            conn.commit()
-            print("DEBUG: Added 'user_id' column to Letters table.")
-            # If you want to add the foreign key constraint after adding the column,
-            # it's more complex and might require recreating the table or using a separate migration tool.
-            # For simplicity in SQLite, adding the FOREIGN KEY in the initial CREATE TABLE
-            # and just adding the column here for existing tables is common.
-        except sqlite3.Error as e:
-            print(f"DEBUG: Error adding 'user_id' column: {e}")
-    # END NEW MIGRATION
-
-    conn.commit() # Commit any pending changes from create table or alter table
+    conn.commit()
     conn.close()
 
-# --- NEW: User management functions ---
-import hashlib
-
-def hash_password(password):
-    """Hashes a password using SHA256 for storage."""
+# --- User Management Functions ---
+def _hash_password(password):
+    """Hashes a password using SHA256. This is an internal helper function."""
     return hashlib.sha256(password.encode()).hexdigest()
 
-def verify_password(stored_password_hash, provided_password):
-    """Verifies a provided password against a stored hash."""
-    return stored_password_hash == hash_password(provided_password)
-
-def add_user(username, password, role='user'):
-    """Adds a new user to the Users table."""
+def get_user_by_username(username):
+    """Retrieves a user by username."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    password_hash = hash_password(password)
+    cursor.execute("SELECT id, username, password_hash, role FROM Users WHERE username = ?", (username,))
+    user = cursor.fetchone()
+    conn.close()
+    return dict(user) if user else None
+
+def get_user_by_id(user_id):
+    """Retrieves a user by ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, role, password_hash FROM Users WHERE id = ?", (user_id,)) 
+    user = cursor.fetchone()
+    conn.close()
+    return dict(user) if user else None
+
+def add_user(username, password, role):
+    """Adds a new user to the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    hashed_password = _hash_password(password)
     try:
         cursor.execute("INSERT INTO Users (username, password_hash, role) VALUES (?, ?, ?)",
-                       (username, password_hash, role))
+                       (username, hashed_password, role))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError: 
         messagebox.showerror("خطا", "نام کاربری از قبل موجود است.")
         return False
     except Exception as e:
@@ -150,23 +125,16 @@ def add_user(username, password, role='user'):
     finally:
         conn.close()
 
-def get_user_by_username(username):
-    """Retrieves user data by username."""
+def verify_password(username, password):
+    """Verifies a user's password."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM Users WHERE username=?", (username,))
-    user = cursor.fetchone()
+    cursor.execute("SELECT password_hash FROM Users WHERE username = ?", (username,))
+    user_data = cursor.fetchone()
     conn.close()
-    return dict(user) if user else None
-
-def get_user_by_id(user_id):
-    """Retrieves user data by ID."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM Users WHERE id=?", (user_id,))
-    user = cursor.fetchone()
-    conn.close()
-    return dict(user) if user else None
+    if user_data:
+        return user_data['password_hash'] == _hash_password(password)
+    return False
 
 def get_all_users():
     """Retrieves all users from the database."""
@@ -177,26 +145,59 @@ def get_all_users():
     conn.close()
     return [dict(user) for user in users]
 
-def update_user_role(user_id, new_role):
-    """Updates the role of an existing user."""
+def update_user(user_id, username=None, role=None):
+    """Updates an existing user's username or role."""
     conn = get_db_connection()
     cursor = conn.cursor()
+    updates = []
+    params = []
+    if username:
+        updates.append("username = ?")
+        params.append(username)
+    if role:
+        updates.append("role = ?")
+        params.append(role)
+    
+    if not updates:
+        conn.close()
+        return False 
+
+    query = f"UPDATE Users SET {', '.join(updates)} WHERE id = ?"
+    params.append(user_id)
     try:
-        cursor.execute("UPDATE Users SET role=? WHERE id=?", (new_role, user_id))
+        cursor.execute(query, tuple(params))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        messagebox.showerror("خطا", "نام کاربری از قبل موجود است.")
+        return False
+    except Exception as e:
+        messagebox.showerror("خطا", f"خطا در ویرایش کاربر: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_user_password(user_id, new_password):
+    """Updates a user's password."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    hashed_password = _hash_password(new_password)
+    try:
+        cursor.execute("UPDATE Users SET password_hash = ? WHERE id = ?", (hashed_password, user_id))
         conn.commit()
         return True
     except Exception as e:
-        messagebox.showerror("خطا", f"خطا در به‌روزرسانی نقش کاربر: {e}")
+        messagebox.showerror("خطا", f"خطا در تغییر رمز عبور: {e}")
         return False
     finally:
         conn.close()
 
 def delete_user(user_id):
-    """Deletes a user from the Users table."""
+    """Deletes a user from the database."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM Users WHERE id=?", (user_id,))
+        cursor.execute("DELETE FROM Users WHERE id = ?", (user_id,))
         conn.commit()
         return True
     except Exception as e:
@@ -205,231 +206,66 @@ def delete_user(user_id):
     finally:
         conn.close()
 
-# --- Existing functions (modified insert_letter and get_letters_from_db) ---
-
-def insert_organization(name, industry, phone, email, address, description):
-    """Inserts a new organization into the database."""
+# --- Letter Management Functions ---
+# Modified insert_letter to accept individual parameters
+def insert_letter(letter_code_prefix, letter_code_number, letter_code_persian, type, date_gregorian, date_shamsi_persian, subject, organization_id, contact_id, body, file_path, user_id):
+    """Inserts a new letter record into the database."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT INTO Organizations (name, industry, phone, email, address, description)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (name, industry, phone, email, address, description))
+            INSERT INTO Letters (letter_code_prefix, letter_code_number, letter_code_persian, type, date_shamsi_persian, subject, body, organization_id, contact_id, file_path, user_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            letter_code_prefix,
+            letter_code_number,
+            letter_code_persian,
+            type,
+            date_shamsi_persian,
+            subject,
+            body,
+            organization_id,
+            contact_id,
+            file_path,
+            user_id,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S") # Add created_at
+        ))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
-        messagebox.showerror("خطا", "سازمانی با این نام از قبل وجود دارد.", title="خطای ورودی")
-        return False
     except Exception as e:
-        messagebox.showerror("خطا", f"خطا در افزودن سازمان: {e}", title="خطا")
+        messagebox.showerror("خطا در ذخیره نامه", f"خطا در ذخیره نامه در دیتابیس: {e}")
         return False
     finally:
         conn.close()
 
-def update_organization(org_id, name, industry, phone, email, address, description):
-    """Updates an existing organization in the database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            UPDATE Organizations SET name=?, industry=?, phone=?, email=?, address=?, description=?
-            WHERE id=?
-        """, (name, industry, phone, email, address, description, org_id))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        messagebox.showerror("خطا", "سازمانی با این نام از قبل وجود دارد.", title="خطای ورودی")
-        return False
-    except Exception as e:
-        messagebox.showerror("خطا", f"خطا در ویرایش سازمان: {e}", title="خطا")
-        return False
-    finally:
-        conn.close()
-
-def delete_organization(org_id):
-    """Deletes an organization from the database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM Organizations WHERE id=?", (org_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        messagebox.showerror("خطا", f"خطا در حذف سازمان: {e}", title="خطا")
-        return False
-    finally:
-        conn.close()
-
-def get_organizations_from_db(search_term=""):
-    """Retrieves organizations from the database, optionally filtered by search term."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = "SELECT * FROM Organizations"
-    params = []
-    if search_term:
-        query += " WHERE name LIKE ? OR industry LIKE ? OR phone LIKE ? OR email LIKE ?"
-        search_pattern = '%' + search_term + '%'
-        params = [search_pattern, search_pattern, search_pattern, search_pattern]
-    cursor.execute(query, tuple(params))
-    organizations = cursor.fetchall()
-    conn.close()
-    return [dict(org) for org in organizations] # Convert rows to dictionaries
-
-def get_organization_by_id(org_id):
-    """Retrieves a single organization record by its ID."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM Organizations WHERE id=?", (org_id,))
-    org = cursor.fetchone()
-    conn.close()
-    return dict(org) if org else None
-
-def insert_contact(organization_id, first_name, last_name, title, phone, email, notes):
-    """Inserts a new contact into the database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO Contacts (organization_id, first_name, last_name, title, phone, email, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (organization_id, first_name, last_name, title, phone, email, notes))
-        conn.commit()
-        return True
-    except Exception as e:
-        messagebox.showerror("خطا", f"خطا در افزودن مخاطب: {e}", title="خطا")
-        return False
-    finally:
-        conn.close()
-
-def update_contact(contact_id, organization_id, first_name, last_name, title, phone, email, notes):
-    """Updates an existing contact in the database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            UPDATE Contacts SET organization_id=?, first_name=?, last_name=?, title=?, phone=?, email=?, notes=?
-            WHERE id=?
-        """, (organization_id, first_name, last_name, title, phone, email, notes, contact_id))
-        conn.commit()
-        return True
-    except Exception as e:
-        messagebox.showerror("خطا", f"خطا در ویرایش مخاطب: {e}", title="خطا")
-        return False
-    finally:
-        conn.close()
-
-def delete_contact(contact_id):
-    """Deletes a contact from the database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM Contacts WHERE id=?", (contact_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        messagebox.showerror("خطا", f"خطا در حذف مخاطب: {e}", title="خطا")
-        return False
-    finally:
-        conn.close()
-
-def get_contacts_from_db(organization_id=None, search_term=""):
-    """Retrieves contacts from the database, optionally filtered by organization_id or search term."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = """
-        SELECT C.*, O.name AS organization_name
-        FROM Contacts C
-        LEFT JOIN Organizations O ON C.organization_id = O.id
-    """
-    conditions = []
-    params = []
-
-    if organization_id:
-        conditions.append("C.organization_id = ?")
-        params.append(organization_id)
-    
-    if search_term:
-        conditions.append("(C.first_name LIKE ? OR C.last_name LIKE ? OR C.title LIKE ? OR O.name LIKE ?)")
-        search_pattern = '%' + search_term + '%'
-        params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
-
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-    
-    cursor.execute(query, tuple(params))
-    contacts = cursor.fetchall()
-    conn.close()
-    return [dict(contact) for contact in contacts] # Convert rows to dictionaries
-
-def get_contact_by_id(contact_id):
-    """Retrieves a single contact record by its ID."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT C.*, O.name AS organization_name
-        FROM Contacts C
-        LEFT JOIN Organizations O ON C.organization_id = O.id
-        WHERE C.id=?
-    """, (contact_id,))
-    contact = cursor.fetchone()
-    conn.close()
-    return dict(contact) if contact else None
-
-# Modified: Now accepts user_id
-def insert_letter(letter_code, letter_code_persian, letter_type_abbr, letter_type_persian,
-                  date_gregorian, date_shamsi_persian, subject, 
-                  organization_id, contact_id, body, file_path, user_id=None): # user_id is now an argument
-    """Inserts a new letter into the database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO Letters (letter_code, letter_code_persian, letter_type_abbr, letter_type_persian,
-                                 date_gregorian, date_shamsi_persian, subject, 
-                                 organization_id, contact_id, body, file_path, user_id) -- user_id added here
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) -- Added ? for user_id
-        """, (letter_code, letter_code_persian, letter_type_abbr, letter_type_persian,
-              date_gregorian, date_shamsi_persian, subject, 
-              organization_id, contact_id, body, file_path, user_id)) # user_id passed here
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError as e:
-        if "UNIQUE constraint failed: Letters.letter_code" in str(e):
-            messagebox.showerror(title="خطای ورودی", message="شماره نامه تکراری است. لطفاً دوباره تلاش کنید.")
-        else:
-            messagebox.showerror(title="خطا", message=f"خطا در افزودن نامه: {e}")
-        return False
-    except Exception as e:
-        messagebox.showerror(title="خطا", message=f"خطا در افزودن نامه: {e}")
-        return False
-    finally:
-        conn.close()
-
-# Modified: Now fetches username
 def get_letters_from_db(search_term=""):
-    """Retrieves letters from the database, optionally filtered by search term."""
+    """Retrieves letter records from the database, optionally filtered by search term."""
     conn = get_db_connection()
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+    
     query = """
         SELECT 
             L.*, 
+            L.type AS letter_type_raw, -- Explicitly select and alias the 'type' column
             O.name AS organization_name, 
             C.first_name, 
             C.last_name,
-            U.username AS created_by_username -- NEW: Fetch username
+            C.title AS contact_title,
+            U.username AS created_by_username
         FROM Letters L
         LEFT JOIN Organizations O ON L.organization_id = O.id
         LEFT JOIN Contacts C ON L.contact_id = C.id
-        LEFT JOIN Users U ON L.user_id = U.id -- NEW: Join with Users table
+        LEFT JOIN Users U ON L.user_id = U.id
     """
-    conditions = []
+    
     params = []
+    conditions = []
 
     if search_term:
-        conditions.append("(L.letter_code_persian LIKE ? OR L.subject LIKE ? OR O.name LIKE ? OR C.first_name LIKE ? OR C.last_name LIKE ? OR L.letter_type_persian LIKE ? OR U.username LIKE ?)") # Added username to search
-        search_pattern = '%' + search_term + '%'
-        params.extend([search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern]) # Extend for the new search term
+        search_pattern = f"%{search_term}%"
+        conditions.append("(L.letter_code_persian LIKE ? OR L.type LIKE ? OR L.subject LIKE ? OR O.name LIKE ? OR C.first_name LIKE ? OR C.last_name LIKE ? OR U.username LIKE ?)")
+        params.extend([search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern])
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -450,26 +286,167 @@ def get_letter_by_code(letter_code_display):
     query = """
         SELECT 
             L.*, 
+            L.type AS letter_type_raw, -- Explicitly select and alias the 'type' column
             O.name AS organization_name, 
             C.first_name, 
             C.last_name,
             C.title AS contact_title,
-            U.username AS created_by_username -- NEW: Fetch username
+            U.username AS created_by_username 
         FROM Letters L
         LEFT JOIN Organizations O ON L.organization_id = O.id
         LEFT JOIN Contacts C ON L.contact_id = C.id
-        LEFT JOIN Users U ON L.user_id = U.id -- NEW: Join with Users table
+        LEFT JOIN Users U ON L.user_id = U.id 
         WHERE L.letter_code_persian = ?
     """
     try:
         cursor.execute(query, (letter_code_display,))
-        row = cursor.fetchone()
-        if row:
-            return dict(row) 
-        else:
-            return None
+        letter = cursor.fetchone()
+        return dict(letter) if letter else None
     except Exception as e:
-        print(f"Database error in get_letter_by_code: {e}")
+        messagebox.showerror("خطا در بازیابی نامه", f"خطا در بازیابی نامه با کد {letter_code_display}: {e}")
         return None
+    finally:
+        conn.close()
+
+# --- Organization and Contact functions ---
+def get_organizations_from_db(search_term=""): 
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    query = "SELECT id, name, industry, phone, email, address, description FROM Organizations"
+    params = []
+    if search_term:
+        query += " WHERE name LIKE ?"
+        params.append(f"%{search_term}%")
+    query += " ORDER BY name"
+    cursor.execute(query, params)
+    orgs = cursor.fetchall()
+    conn.close()
+    return [dict(org) for org in orgs]
+
+def get_organization_by_id(org_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, industry, phone, email, address, description FROM Organizations WHERE id = ?", (org_id,))
+    org = cursor.fetchone()
+    conn.close()
+    return dict(org) if org else None
+
+def insert_organization(name, industry, phone, email, address, description):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO Organizations (name, industry, phone, email, address, description) VALUES (?, ?, ?, ?, ?, ?)",
+                       (name, industry, phone, email, address, description))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        messagebox.showerror("خطا", "سازمانی با این نام از قبل موجود است.")
+        return False
+    finally:
+        conn.close()
+
+def update_organization(org_id, name, industry, phone, email, address, description):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE Organizations SET name=?, industry=?, phone=?, email=?, address=?, description=? WHERE id=?",
+                       (name, industry, phone, email, address, description, org_id))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        messagebox.showerror("خطا", "سازمانی با این نام از قبل موجود است.")
+        return False
+    finally:
+        conn.close()
+
+def delete_organization(org_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM Organizations WHERE id=?", (org_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        messagebox.showerror("خطا", f"خطا در حذف سازمان: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_contacts_from_db(organization_id=None, search_term=""): 
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    query = """
+        SELECT C.id, C.organization_id, C.first_name, C.last_name, C.title, C.phone, C.email, C.notes, O.name AS organization_name
+        FROM Contacts C
+        LEFT JOIN Organizations O ON C.organization_id = O.id
+    """
+    params = []
+    conditions = []
+
+    if organization_id is not None:
+        conditions.append("C.organization_id = ?")
+        params.append(organization_id)
+    
+    if search_term:
+        search_pattern = f"%{search_term}%"
+        conditions.append("(C.first_name LIKE ? OR C.last_name LIKE ? OR C.title LIKE ? OR O.name LIKE ?)")
+        params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    
+    query += " ORDER BY C.last_name, C.first_name"
+    
+    cursor.execute(query, params)
+    contacts = cursor.fetchall()
+    conn.close()
+    return [dict(contact) for contact in contacts]
+
+def get_contact_by_id(contact_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, organization_id, first_name, last_name, title, phone, email, notes FROM Contacts WHERE id = ?", (contact_id,))
+    contact = cursor.fetchone()
+    conn.close()
+    return dict(contact) if contact else None
+
+def insert_contact(organization_id, first_name, last_name, title, phone, email, notes):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO Contacts (organization_id, first_name, last_name, title, phone, email, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                       (organization_id, first_name, last_name, title, phone, email, notes))
+        conn.commit()
+        return True
+    except Exception as e:
+        messagebox.showerror("خطا", f"خطا در افزودن مخاطب: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_contact(contact_id, organization_id, first_name, last_name, title, phone, email, notes):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE Contacts SET organization_id=?, first_name=?, last_name=?, title=?, phone=?, email=?, notes=? WHERE id=?",
+                       (organization_id, first_name, last_name, title, phone, email, notes, contact_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        messagebox.showerror("خطا", f"خطا در ویرایش مخاطب: {e}")
+        return False
+    finally:
+        conn.close()
+
+def delete_contact(contact_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM Contacts WHERE id=?", (contact_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        messagebox.showerror("خطا", f"خطا در حذف مخاطب: {e}")
+        return False
     finally:
         conn.close()
